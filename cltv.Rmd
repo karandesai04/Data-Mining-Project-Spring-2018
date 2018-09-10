@@ -1,0 +1,695 @@
+---
+output: html_document
+html_document:
+  fig_width: 11
+  fig_height: 7
+---
+##Customer Life-Time Value
+
+```{r cache=TRUE}
+options(scipen = 99)
+set.seed(2)
+
+# Loading all required packages
+library(ggplot2)
+library(plyr)
+library(glmnet)
+library(caret)
+library(pROC)
+library(randomForest)
+library(gbm)
+library(lubridate)
+library(factoextra)
+library(cluster)
+```
+
+## Exploratory Data Analysis:
+```{r cache=TRUE}
+# Reading the csv data
+data.ltv =read.csv("ltv.csv")
+
+# Data structure
+str(data.ltv)
+summary(data.ltv)
+```
+After initial exploration of the data in Excel, we conculded the following:
+
+1) No missing values(NA) present in the data
+
+2) No discrepancy in the collection of observations
+
+3) Number of females are way more than males
+
+Data requires no further cleaning.
+
+```{r cache = TRUE}
+#Sort data according to id and then status
+sorted.data = data.ltv[with(data.ltv, order(id, status)), ]
+
+#Find all records who indicate new ids
+x = sorted.data[sorted.data$status==0,]
+
+#Find number of records who are open
+y = sorted.data[sorted.data$status==1,]
+
+#Unique ids who were open
+uniq = unique(y$id)
+
+#Non open ids (A-B) set difference
+sorted.data.1 = subset(sorted.data, !(id %in% uniq))
+
+#Find number of records who left
+z = sorted.data[sorted.data$status==2,]
+
+# All ids who did not leave
+c = sorted.data[sorted.data$completed==1,]
+```
+
+## Males vs Female Count in the dataset
+```{r cache = TRUE}
+# Plot to showcase distribution of males and females in the dataset
+ggplot(data = sorted.data, mapping = aes(x=status, color=gender, fill = gender)) + geom_histogram(position = 'dodge') + labs(title='Male-Female Count', x = 'Status', y = 'Count')
+
+```
+
+From the above plot, it appears that there are more females than males in all three status categories. In status 1, the gender difference is prominent.
+
+```{r cache = TRUE}
+# Extracting the final status of every customer
+temp = sorted.data[sorted.data$id==1, ]
+x = temp[nrow(temp),]
+final = data.frame(matrix(ncol = 9, nrow = 0))
+colnames(final)=colnames(sorted.data)
+final = rbind(final,x)
+for(i in 2:10000){
+  temp = sorted.data[sorted.data$id==i,]
+  x = temp[nrow(temp),]
+  final = rbind(final,x)
+}
+
+# Plotting the count of customers based on Status
+ggplot(data=final, mapping = aes(x=status)) + geom_histogram() + labs(title = 'Customer count by status', x = 'Status', y ='Count')
+
+```
+
+For the provided time-period in the dataset, at the end of 2014, we can observe that the number of customers ending their subscription is more than the number of customers who are still subscribed. 
+
+## Calculating leaving rate of customers grouped by gender
+```{r cache=TRUE}
+# Separating males and females in two separate data frames
+df.male = final[final$gender=="M",]
+df.female = final[final$gender=="F",]
+
+# Separation via status and calculation of leaving rate
+df.male.1 = df.male[df.male$status=="1",]
+df.male.2 = df.male[df.male$status=="2",]
+leaving.rate.m = nrow(df.male.2)/nrow(df.male)
+
+# Male leaving rate
+leaving.rate.m
+
+# Separation via status and calculation of leaving rate
+df.female.1 = df.female[df.female$status=="1",]
+df.female.2 = df.female[df.female$status=="2",]
+leaving.rate.f = nrow(df.female.2)/nrow(df.female)
+
+# Female leaving rate
+leaving.rate.f
+```
+The leaving rate for males is greater than that of females for the entire given time duration
+
+## Completion rate calculation
+```{r cache=TRUE}
+# Extract year from all dates and adding to main data set
+year<-as.vector(strftime(sorted.data$date, "%Y"))
+augment.sorted.data = cbind(sorted.data,year)
+
+# Histogram plots for different customer status
+df.0 = augment.sorted.data[augment.sorted.data$status=="0",]
+ggplot(data = df.0, mapping = aes(x = status, color = year, fill = year)) + geom_histogram(position = 'dodge', binwidth = 10) + labs(title='Count of new subscribers per year', x = 'Status', y='Count')
+
+df.1 = augment.sorted.data[augment.sorted.data$status=="1",]
+ggplot(data = df.1, mapping = aes(x = status, color = year, fill = year)) + geom_histogram(position = 'dodge',binwidth = 10) + labs(title='Activity Count for existing subscribers per year', x = 'Status', y='Count')
+
+df.2 = augment.sorted.data[augment.sorted.data$status=="2",]
+ggplot(data = df.2, mapping = aes(x = status, color = year, fill = year)) + geom_histogram(position = 'dodge',binwidth = 10) + labs(title='Subscription cancellations per year', x = 'Status', y='Count')
+
+# Completion rate determination
+completed.1 = df.1[df.1$completed=="1",]
+completion.rate.1 =  nrow(completed.1)/nrow(df.1)
+completion.rate.all =  nrow(completed.1)/nrow(sorted.data)
+
+completion.rate.all
+```
+
+## Completed Orders Analysis
+```{r cache=TRUE}
+cmpltd.1 = subset(completed.1, select = c(id,completed))
+sum.completed.1=data.frame(table(cmpltd.1$id))
+
+# completed order per customer who unsubscribed
+z = sorted.data[sorted.data$status==2,]
+z = subset(z, select = c(id,completed))
+count.completed.2 = data.frame(table(z$id))
+df.2.completed = merge(sum.completed.1,count.completed.2, by = "Var1")
+df.2.completed = df.2.completed[with(df.2.completed, order(Var1)), ]
+head(df.2.completed, 5)
+
+# Completed order per customer who have not unsubscribed
+z2 = subset(sorted.data, !(id %in% z$id))
+z2 = subset(z2, select = c(id,completed))
+count.completed.1 = data.frame(table(z2$id))
+df.1.completed = merge(sum.completed.1,count.completed.1, by = "Var1")
+df.1.completed = df.1.completed[with(df.1.completed, order(Var1)), ]
+head(df.1.completed, 5)
+```
+
+## Feature Engineering
+```{r cache = TRUE}
+# function to generate new features and aggregate over different time periods 
+data.generator = function(partitionDate, endDate){
+data.ltv.new = read.csv("ltv.csv")
+data.ltv.new$date = as.Date(data.ltv.new$date)
+
+##Customers who are still subscribed in 2013
+data.ltv.1 = subset(data.ltv.new, subset = data.ltv.new$date<= as.Date(partitionDate))
+data.ltv.2 = data.ltv.1[data.ltv.1$status==2,]
+
+left.id = unique(data.ltv.2$id)
+
+data.ltv.2014 = data.ltv.1[!data.ltv.1$id %in% left.id,]
+
+##New features:
+data.pages = subset(data.ltv.2014, select = c(id,pages,onsite,entered,completed))
+sum.data.pages=data.frame(table(data.ltv.2014$id))
+
+## aggregating total pages, onsite, entered, completed, holiday orders
+data.ltv.aggregate = aggregate(. ~id, data=data.ltv.2014, sum)
+
+#select relevant features
+data.ltv.aggregate = subset(data.ltv.aggregate, select = c('id','pages','onsite','entered','completed','holiday'))
+
+completed_sum = sum(data.ltv.aggregate$completed)
+
+#calculate new features
+data.ltv.features = mutate(data.ltv.aggregate, pm= pages/onsite, rate.completed = completed/entered, holiday_complete = holiday/completed, complete_onsite = completed/onsite, my_complete = completed/completed_sum)
+
+#get a coaggulated data frame
+data.final = merge(data.ltv.new, data.ltv.features, by = "id")
+
+#sort
+sorted.data.final = data.final[with(data.final, order(id, status)), ]
+
+# get unique id from data set 2014 (did not leave)
+data.final.agg = data.frame(matrix(ncol = 19, nrow = 0))
+colnames(data.final.agg)=colnames(sorted.data.final)
+unqi = unique(data.ltv.2014$id)
+
+#for all ids get the joining dates 
+for(i in unqi){
+  temp = sorted.data.final[sorted.data.final$id==i,]
+  x = temp[1,]
+  data.final.agg = rbind(data.final.agg,x)
+}
+
+data.ltv.2014.all2 = subset(data.ltv.new, subset = (data.ltv.new$date <= as.Date(endDate)))
+data.ltv.2014.test = data.ltv.2014.all2[data.ltv.2014.all2$id %in% unqi,]
+
+sorted.data.test = data.ltv.2014.test[with(data.ltv.2014.test, order(id, status)), ]
+
+# get unique id from data set 2014 (did not leave)
+data.final.agg.test = data.frame(matrix(ncol = 19, nrow = 0))
+colnames(data.final.agg.test)=colnames(sorted.data.test)
+
+unqi2 = unique(sorted.data.test$id)
+
+for(i in unqi2){
+  temp = sorted.data.test[sorted.data.test$id==i,]
+  x = temp[nrow(temp),]
+  data.final.agg.test = rbind(data.final.agg.test,x)
+}
+
+##############################################################
+
+#FINAL DATA MODEL
+data.model = cbind(data.final.agg, finalDate = data.final.agg.test$date, finalStatus =data.final.agg.test$status)
+return(data.model)
+}
+```
+
+
+## Attrition Model:
+
+Predict whether a customer will cancel their subscription in the near future 
+
+## Partition and Aggregation of Data over different time periods
+```{r cache=TRUE}
+# partition by dates and binding with 'data.final.model'
+data.final.model = data.frame(matrix(ncol = 21, nrow = 0))
+data.current = data.generator('2011-06-30','2011-12-31')
+colnames(data.final.model)=colnames(data.current)
+
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2012-01-01','2012-06-30')
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2012-07-01','2012-12-31')
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2013-01-01','2013-06-30')
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2013-07-01','2013-12-31')
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2014-01-01','2014-06-30')
+data.final.model = rbind(data.final.model,data.current)
+
+data.current = data.generator('2014-07-01','2014-12-31')
+data.final.model = rbind(data.final.model,data.current)
+
+data.model = data.final.model
+```
+
+
+## Data splitting for training and testing the model
+```{r cache = TRUE}
+# get the unique ids
+uniqueID = unique(data.model$id)
+
+data.model$finalStatus = as.factor(data.model$finalStatus)
+
+# Assigning 20% data for testing and 80% data for training
+test = sample(length(uniqueID), size=0.2*length(uniqueID))
+
+test.data = data.model[data.model$id %in% test,]
+train.data = data.model[!data.model$id %in% test,]
+
+train.finalStatus = train.data$finalStatus 
+train.finalDate= train.data$finalDate
+
+test.finalStatus = test.data$finalStatus
+
+test.data.orig = test.data
+test.data = test.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","finalDate","holiday_complete","complete_onsite","my_complete")]
+
+train.data.temp = train.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","finalDate","holiday_complete","complete_onsite","my_complete")]
+
+train.data.temp$gender = as.numeric(train.data.temp$gender)
+test.data$finalDate = as.numeric(test.data$finalDate)
+ 
+train.output = train.data[,"finalStatus"]
+test.data$date = as.numeric(test.data$date)
+ 
+test.data$finalDate = as.numeric(test.data$finalDate)
+
+# Converting data types to appropriate format for model fitting
+train.data.temp$date = as.numeric(train.data.temp$date)
+train.data.temp$finalDate = as.numeric(train.data.temp$finalDate)
+test.data$gender = as.numeric(test.data$gender) 
+```
+
+
+## 10-Fold Cross Validation
+```{r cache=TRUE}
+# Preparing data for 10-fold Cross-Validation
+unique_id = unique(train.data.temp$id)
+
+seq = seq(1:length(unique_id))
+
+seq = sample(seq)
+df = as.data.frame(seq)
+
+# creating data folds
+folds <- cut(df$seq, breaks = 10, labels = FALSE)
+df = as.data.frame(cbind(id = unique_id, folds))
+
+train.data.temp_folds = train.data.temp
+train.data.temp_folds = dplyr::inner_join(train.data.temp, df, by = "id")
+
+fold = train.data.temp_folds$folds
+
+```
+
+
+## Fitting Cross-Validated Regularized Logisitic Regression
+```{r cache=TRUE}
+glm.result =cv.glmnet(as.matrix(train.data.temp),train.output, family = "binomial", alpha =1, foldid = fold, nfolds=10)
+
+# Choosing the minimum CV error lambda value
+bestlam = glm.result$lambda.min
+
+# Making predictions using the fitted model
+lasso.pred = predict(glm.result, type = 'response', s=bestlam, newx = as.matrix(test.data))
+lasso.class = rep(1,nrow(lasso.pred))
+lasso.class[lasso.pred>0.25] = 2
+
+# Checking model performance on test data
+myROC = roc(predictor=as.numeric(lasso.pred), response = test.finalStatus, positive = levels(test.finalStatus)[2])
+plot(myROC)
+confusionMatrix(data = lasso.class, test.finalStatus, positive = levels(test.finalStatus)[2])
+
+#Calibration Plot
+calibrate.plot(test.finalStatus, lasso.pred, shade.col = NA)
+```
+
+The confusion matrix gives Senstitvity around 69% @ specificity = 79%
+
+Sensitivity is important for our model as False Negatives are costlier than False Positives to the e-card company.
+
+Consider the following scenario: If we predict a customer would not leave, but he/she actually leaves, it would be a revenue loss for the company. Specificity is not of prime importance here as a customer staying in subscription despite our prediction that he/she would leave would not cause a loss for the company. In fact, it would be an  additional revenue.
+
+A 69% Sensitivity is not desirable and it indicates that the model could be improved and better results could be obtained using a better model.
+
+The observed calibration plot indicates that the model performance is decent but is overestimating for observed probablities of around 0.7. 
+## Random Forest Classification Model
+```{r cache=TRUE}
+# Preparing training and testing data for fitting and validating Random Forest model
+train.data.temp1 = train.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","holiday_complete","complete_onsite","my_complete","finalDate","finalStatus")]
+
+test.data1 = test.data.orig[,c("id","status","gender","date","holiday.y","pm","rate.completed","holiday_complete","complete_onsite","my_complete","finalDate","finalStatus")]
+
+# Fitting a stratified Random Forest Model on the data in order to ensure the bootstrap data has consistent customer IDs across the training data. Cut-off probability of 0.25 specified for classification in order to acheive the goal of high sensitivity 
+rf.model <- randomForest(finalStatus ~ gender+date+holiday.y+pm+rate.completed+finalDate+holiday_complete+complete_onsite+my_complete, data=train.data,  mtry=9, importance=TRUE, cutoff = c(0.75,0.25), strata = "id")
+
+# Plotting Variable importance plot to see which variable has highest importance in determining the classification
+varImpPlot(rf.model)
+
+# For determining the Misclassification rate by prediction using the fitted model
+rf.pred1 = predict(rf.model,newdata=test.data1, type = "prob")
+rf.pred = predict(rf.model,newdata=test.data1)
+
+# Plotting ROC curve
+myROC = roc(predictor=as.numeric(rf.pred1[,2]), response = test.data1$finalStatus, positive = levels(test.data1$finalStatus)[2])
+plot(myROC)
+
+# Confusion matrix
+confusionMatrix(data = rf.pred, test.data1$finalStatus, positive = levels(test.data1$finalStatus)[2])
+```
+Random Forest has performed much better than the previous model, giving a sensitivity around 84%. 
+
+We shall look into another model for improvement: Gradient Boosting.
+
+## Gradient Boosting
+```{r cache = TRUE}
+# Preparing training and testing data for fitting and validating Gradient Boosted model
+train.data.temp1 = train.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","holiday_complete","complete_onsite","my_complete","finalDate","finalStatus")]
+
+test.data1 = test.data.orig[,c("id","status","gender","date","holiday.y","pm","rate.completed","holiday_complete","complete_onsite","my_complete","finalDate","finalStatus")]
+# Creating the train and test data for fitting the model
+train.data.temp1$date = as.numeric(train.data.temp1$date)
+train.data.temp1$finalDate = as.numeric(train.data.temp1$finalDate)
+train.data.temp1$finalStatus = as.numeric(train.data.temp1$finalStatus)
+
+# Converting to Bernoulli's distribution
+train.data.temp1$finalStatus[train.data.temp1$finalStatus==1] = 0
+train.data.temp1$finalStatus[train.data.temp1$finalStatus==2] = 1
+
+test.data1$finalStatus = as.numeric(test.data1$finalStatus)
+test.data1$finalStatus[test.data1$finalStatus==1] = 0
+test.data1$finalStatus[test.data1$finalStatus==2] = 1
+
+# Fitting a Gradient Boosting model
+GBM_model = gbm(formula = finalStatus ~ gender+date+holiday.y+pm+rate.completed+finalDate+holiday_complete+complete_onsite+my_complete,
+                    distribution = "bernoulli",
+                    data = train.data.temp1,
+                    n.trees = 2000,
+                    shrinkage = 0.1,
+                    n.minobsinnode = 10,
+                    interaction.depth = 2)
+
+# Prediction on test data using the GBM model
+prediction <- predict(GBM_model, newdata = test.data1, type="response",n.trees=2000)
+
+# Storing the predictions on test data
+outputDataSet = data.frame("RowID" = test.data$id,
+                           "ProbabilityOfResponse" = prediction)
+
+# Setting the status using the probaility cutoff 0.2
+outputDataSet$status = 0
+outputDataSet$status[outputDataSet$ProbabilityOfResponse>=0.2] = 2
+outputDataSet$status[outputDataSet$ProbabilityOfResponse<0.2] = 1
+
+# Converting to original status from Bernoulli format
+test.data1$finalStatus[test.data1$finalStatus==1] = 2
+test.data1$finalStatus[test.data1$finalStatus==0] = 1
+
+# Plotting tHE ROC curve
+myROC = roc(predictor=outputDataSet$ProbabilityOfResponse, response = test.data1$finalStatus, positive = levels(as.factor(test.data1$finalStatus))[2])
+plot(myROC)
+
+# Confusion matrix
+confusionMatrix(data = outputDataSet$status, test.data1$finalStatus, positive = levels(as.factor(test.data1$finalStatus))[2])
+```
+Gradient Boosting model gives a better sensitivity and performs considerably better
+
+## Predicting Customer Life-Time Value:
+
+Determining the ltv of a customer in terms of revenue earned for monthly subscription cost of $1
+
+## Getting training and testig data
+```{r cache = TRUE}
+# Calculating difference in days between the initial date and final date for every observation status
+data.model$date.diff = data.model$finalDate - data.model$date
+
+# value in dollars at the rate of $1 per month
+data.model$date.diff = data.model$date.diff/(365/12)
+data.model$date.diff = as.numeric(round(data.model$date.diff, digits = 3))
+
+# selecting unique ideas
+uniqueID = unique(data.model$id)
+
+#splitting data for training the model and testing the model using 80-20 rule
+test = sample(length(uniqueID), size=0.2*length(uniqueID))
+test.data = data.model[data.model$id %in% test,]
+train.data = data.model[!data.model$id %in% test,]
+
+# store the customer value(dollars) for train data
+train.diff = train.data$date.diff
+
+# store the customer value(dollars) for test data
+test.diff = test.data$date.diff
+
+test.data.orig = test.data
+
+test.data = test.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","finalDate","holiday_complete","complete_onsite","my_complete","finalStatus")]
+  
+train.data.temp = train.data[,c("id","status","gender","date","holiday.y","pm","rate.completed","finalDate","holiday_complete","complete_onsite","my_complete","finalStatus")]
+
+# appropriate data conversions
+train.data.temp$gender = as.numeric(train.data.temp$gender)
+test.data$finalDate = as.numeric(test.data$finalDate)
+test.data$date = as.numeric(test.data$date)
+test.data$finalDate = as.numeric(test.data$finalDate)
+test.data$finalStatus = as.numeric(test.data$finalStatus)
+train.data.temp$date = as.numeric(train.data.temp$date)
+train.data.temp$finalDate = as.numeric(train.data.temp$finalDate)
+test.data$gender = as.numeric(test.data$gender) 
+train.data.temp$finalStatus = as.numeric(train.data.temp$finalStatus)
+ 
+unique_id = unique(train.data.temp$id)
+
+seq = seq(1:length(unique_id))
+
+seq = sample(seq)
+df = as.data.frame(seq)
+```
+
+# 10-Fold Cross Validation for Regularized logistic regression
+```{r cache=TRUE}
+# Setting the folds
+folds <- cut(df$seq, breaks = 10, labels = FALSE)
+df = as.data.frame(cbind(id = unique_id, folds))
+
+train.data.temp_folds = train.data.temp
+train.data.temp_folds = dplyr::inner_join(train.data.temp, df, by = "id")
+
+fold = train.data.temp_folds$folds
+
+# Fitting the Regularized logistic regression model 
+glm.result =cv.glmnet(as.matrix(train.data.temp),train.diff, alpha = 1, foldid = fold, nfolds=10)
+
+# choosing the lambda with min cv error
+bestlam = glm.result$lambda.min
+
+best.index = which(glm.result$lambda==glm.result$lambda.min)
+glm.result$cvm[best.index]
+
+# Prediction on test data using the fitted model
+lasso.pred = predict(glm.result, s=bestlam, newx = as.matrix(test.data))
+
+# The Average Squared Error (ASE)
+mean((lasso.pred - test.diff)^2)
+```
+
+# Fitting a random forest regression to predict customer life-time value
+```{r cache=TRUE}
+# Creating the test data
+test.data1 = test.data.orig[,c("id","status","gender","date","holiday.y","pm","rate.completed","holiday_complete","complete_onsite","my_complete","finalDate","finalStatus","date.diff")]
+
+# Fitting random forest model with stratification by 'id'
+rf.model <- randomForest(date.diff ~ gender+date+holiday.y+pm+rate.completed+finalDate+holiday_complete+complete_onsite+my_complete+finalStatus, data=train.data,  mtry=6, importance=TRUE, strata = "id")
+
+# Plotting the variable importance model
+varImpPlot(rf.model)
+
+# Prediction and determination of ASE
+rf.pred = predict(rf.model, newdata=test.data1)
+mean((rf.pred - test.diff)^2)
+```
+
+The MSE/ASE obtained from random forest is higher than that obtained from 10-Fold cross validated regularized logistic regression.
+
+## Customer Segmentation Scheme (Including the identification of Sleeping Customers)
+
+```{r cache=TRUE}
+# Clustering function to get a segmentation for the given start and end date
+clustering = function(startDate , endDate){
+  
+# Extract the data between the entered dates in the function argument
+
+data.ltv.new.unsup = read.csv("ltv.csv")
+data.ltv.new.unsup$date = as.Date(data.ltv.new.unsup$date)
+data.ltv.unsup = subset(data.ltv.new.unsup, subset = (data.ltv.new.unsup$date <= as.Date(endDate) & (data.ltv.new.unsup$date >= as.Date(startDate))))
+
+
+# Data frame for people with status 2 in the given time frame
+data.ltv.unsup.removed = data.ltv.unsup[data.ltv.unsup$status==2,]
+
+# Unique ids for the people who were of status 2
+left.id.unsup = unique(data.ltv.unsup.removed$id)
+
+# Remove the ids which have status 2 from the main data frame
+data.ltv.unsup.final.repeated = data.ltv.unsup[!data.ltv.unsup$id %in% left.id.unsup,]
+
+# Unique ids present in the main data frame 
+present.id.unsup = unique(data.ltv.unsup.final.repeated$id)
+
+# Columns to be dropped 
+drop <- c("status","gender","date","holiday")
+
+# Remove the columns from the data
+data.ltv.unsup.final.repeated.dropped = data.ltv.unsup.final.repeated[,!(names(data.ltv.unsup.final.repeated) %in% drop)]
+
+
+# Aggregating the values of the features
+data.ltv.unsup.aggregate = aggregate(.~id, data.ltv.unsup.final.repeated.dropped, sum)
+
+# Empty data frame to save the date for the most recent activity for ids in the given time frame
+unsup.date = data.frame(matrix(ncol = 9, nrow = 0))
+
+# Save the maximum date in the empty data frame
+for(i in present.id.unsup ){
+  temp = data.ltv.unsup.final.repeated[data.ltv.unsup.final.repeated$id==i,]
+  x = temp[nrow(temp),]
+  unsup.date = rbind(unsup.date,x)
+}
+
+# Keeping only date and ids in a data frame
+unsup.date = unsup.date[,c("id","date")]
+ 
+# Final data frame with aggregated values and max date for each id 
+data.ltv.unsup.aggregate = merge(data.ltv.unsup.aggregate,unsup.date, by = "id")
+ 
+# Saving the reference date for segmentation in the maxdate variable 
+maxdate = as.Date(endDate) + days(1)
+
+# Data frame recording the in activity period of each id 
+data.ltv.unsup.aggregate$data.diff = maxdate - data.ltv.unsup.aggregate$date
+  
+data.ltv.unsup.aggregate = data.ltv.unsup.aggregate[,c("pages","onsite","entered","completed","data.diff")]
+  
+    
+data.ltv.unsup.aggregate$data.diff = as.numeric(data.ltv.unsup.aggregate$data.diff)
+
+data.ltv.unsup.aggregate.feature = data.ltv.unsup.aggregate
+  
+# Scaling the data for K-Means
+data.ltv.unsup.aggregate.scale = scale(data.ltv.unsup.aggregate,FALSE)
+
+  
+  
+data.ltv.unsup.aggregate.feature$class <- NULL
+  
+# Code Block to plot the elbow plot
+  wssplot <- function(data, nc=15, seed=1234){
+  wss <- (nrow(data)-1)*sum(apply(data,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Number of Clusters",
+       ylab="Within groups sum of squares")}
+
+wssplot(data.ltv.unsup.aggregate.scale, nc=6)
+
+# K-means algorithm  
+results <- kmeans(data.ltv.unsup.aggregate.scale,3,nstart = 40)
+
+# Summary of the k means  
+print(results$centers)
+
+# Plot the observation in the graph  
+clusplot(data.ltv.unsup.aggregate.scale, results$cluster, color=TRUE, shade = TRUE, 
+  	labels=2, lines=0)
+  
+  
+# Hierarchical Clustering
+distance <- dist(data.ltv.unsup.aggregate.scale,method = "euclidean")
+cluster <- hclust(distance,method = 'complete')
+
+# Plot the Dendogram Trees for Hierarchical
+plot(cluster, cex = 0.6, hang = -1)
+  
+nrow(data.ltv.unsup.aggregate.scale)
+
+# Plot the scatter plot for Heinrarchical Segmentation
+grp <- cutree(cluster, k = 3)
+table(grp) 
+fviz_cluster(list(data = data.ltv.unsup.aggregate.scale, cluster = grp),show.clust.cent = TRUE)
+}
+
+# Plotting Clusters for different time periods
+clustering('2012-01-01','2012-12-31')
+
+clustering('2013-01-01','2013-06-30')
+
+clustering('2011-01-01','2014-06-30')
+
+
+```
+## K-Means
+Features used: 
+1) Onsite : The time spent by a particular id on the web page
+2) Pages : Number of pages visited by a particular id
+3) Completed : Number of completed orders
+4) Entered : Flag indicating whether or not user entered the send order path 
+(We aggregated all the above features for every id in the given time frame)
+5) data.diff : The difference in the last date/reference-date and the most recent activity date in days.
+
+We tried to segment customers based on their activities and website utilization trends with a specific focus on sleeping customers. We considered the above mentioned features where each feature will convey some message about user activity and the data.diff gives the information about the inactivity in recent past. 
+
+When we combined the inactivity time with the aggregated features we got to know the activity trends of the customer for a given time frame. Based on the combined information of all the ids we calculated the clusters and their means. 
+
+We classified the segment with the least means for the aggregated features and the highest mean for data.diff as sleeping customers cluster. While the other clusters are classified as moderately active and highly active customers.
+
+
+## Hierarchical Clustering:
+Features used: 
+1) Onsite : The time spent by a particular id on the web page
+2) Pages : Number of pages visited by a particular id
+3) Completed : Number of completed orders
+4) Entered : Flag indicating whether or not user entered the send order path 
+(We aggregated all the above features for every id in the given time frame)
+5) data.diff : The difference in the last date/reference-date and the most recent activity date in days.
+
+The hierarchical model starts making clusters with the minimum distance betwwen two observations and the clusters are made till all the observations are covered in one cluster. We can interpret the Dendogram Graph by cutting at a particular height and observe the clusters. We cut the tree at a height and observed that the observation with similar characterstics are clustered together and this can be seen in the cluster plot for Heirarchical Clustering.
+
+##End of the Project
+
+##References
+1. 95791 - Data Mining
+2. R Documentation
+3. www.r-statistics.com
+4. www.rpubs.com
+5. ISL Textbook
