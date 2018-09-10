@@ -1,7 +1,7 @@
 # Data-Mining-Project-Spring-2018
 Predicting Customer Life-Time Value (ltv) for an Online Greeting Card Company
 
-Team: Karan Hiren Desai, Disha Mahesh Nathani
+Team: Karan Desai, Disha Nathani, Adarsh Saboo, Tushar Advani
 
 Problem Statement: Key tasks 1.Develop an attrition model, to predict whether a customer will cancel their subscription in the near future. Characterize your model performance. 2.Develop a model for estimating the ltv of a customer. Characterize your model performance. 3.Develop a customer segmentation scheme. Include in this scheme the identification of sleeping customers, those that are no longer active but have not canceled their account.
 
